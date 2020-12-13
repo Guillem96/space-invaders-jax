@@ -23,8 +23,7 @@ def run(n_episodes: int, keyboard: bool, render: bool) -> None:
 
     for e in range(n_episodes):
         env.reset()
-        t = 0
-        while True:
+        for t in range(500):
             _render(env, render=render)
 
             action = take_action_fn()
@@ -33,8 +32,6 @@ def run(n_episodes: int, keyboard: bool, render: bool) -> None:
             if done:
                 print(f'Episode finished after {t} timesteps')
                 break
-
-            t += 1
 
     env.close()
 
