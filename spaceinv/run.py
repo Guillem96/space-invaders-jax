@@ -18,8 +18,11 @@ import cv2
 def run(n_episodes: int, keyboard: bool, render: bool) -> None:
 
     env = gym.make('SpaceInvaders-v0')
+
     keyboard_input_fn = functools.partial(_keyboard_input, env=env)
-    take_action_fn = env.action_space.sample if not keyboard else keyboard_input_fn
+    take_action_fn = (env.action_space.sample 
+                      if not keyboard 
+                      else keyboard_input_fn)
 
     for e in range(n_episodes):
         env.reset()
@@ -60,3 +63,4 @@ def _render(env, render: bool = True):
         new_h = int(ar * new_w)
         im = cv2.resize(im[..., ::-1], (new_w, new_h))
         cv2.imshow('Space Invader Frame', im)
+
