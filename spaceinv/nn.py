@@ -30,15 +30,11 @@ class Layer(NamedTuple):
 
 def linear(key: jax.random.PRNGKey,
            in_features: int, out_features: int,
-           kernel_initializer=jax.nn.initializers.he_uniform(),
-           bias_initializer=None,
+           kernel_initializer=jax.nn.initializers.glorot_normal(),
+           bias_initializer=jax.nn.initializers.normal(),
            activation=lambda x: x) -> Layer:
 
     k_key, b_key = jax.random.split(key) 
-
-    if bias_initializer is None:
-        bias_initializer = jax.nn.initializers.uniform(
-                scale=1 / math.sqrt(in_features))
 
     parameters = {
         'kernel': kernel_initializer(
@@ -94,17 +90,13 @@ def conv_2d(key: jax.random.PRNGKey,
             stride: Kernel = 1,
             padding: str = 'valid',
             activation=lambda x: x,
-            kernel_initializer=jax.nn.initializers.he_uniform(),
-            bias_initializer=None) -> Layer:
+            kernel_initializer=jax.nn.initializers.glorot_normal(),
+            bias_initializer=jax.nn.initializers.normal(1e-6)) -> Layer:
 
     kernel_size = _ensure_tuple(kernel_size)
     stride = _ensure_tuple(stride)
 
     k_key, b_key = jax.random.split(key) 
-
-    if bias_initializer is None:
-        bias_initializer = jax.nn.initializers.uniform(
-                scale=1 / math.sqrt(in_channels))
 
     parameters = {
         'kernel': kernel_initializer(
@@ -128,9 +120,21 @@ def conv_2d(key: jax.random.PRNGKey,
                 (1, 1),
                 dn) + parameters['bias']
 
-        return out
+        return activation(out)
 
     return Layer(parameters, forward)
+
+
+def dropout(prob: float) -> Layer:
+
+    def forward(params, x, **kwargs):
+        if kwargs.get('training', True):
+            keep = jax.random.bernoulli(kwargs['key'], prob, x.shape)
+            return np.where(keep, x /prob, 0)
+        else:
+            return x
+
+    return Layer({}, forward)
 
 
 def sequential(*layers: Sequence[Layer]) -> Layer:
@@ -153,7 +157,9 @@ def bce_loss(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     y_pred = y_pred.reshape(-1)
     y_pred = np.clip(y_pred, 1e-7, 1 - 1e-7) # Log stability
 
-    loss = -np.where(y_true == 1, np.log(y_pred), np.log(1 - y_pred))
+    loss = np.where(y_true == 1, y_pred, 1 - y_pred)
+    loss = -np.log(loss)
+
     return np.sum(loss)
 
 

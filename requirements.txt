@@ -1,2 +1,5 @@
 gym
 click
+tqdm
+optax
+tensorflow_datasets
