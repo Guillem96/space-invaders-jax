@@ -1,13 +1,17 @@
 # -*- coding:utf-8 -*-
 
 import sys
+import time
 import functools
+from pathlib import Path
 
 import click
 import matplotlib.pyplot as plt
 
+import jax
 import gym
 import cv2
+import numpy as np
 
 from spaceinv.agent import Agent, Transition
 
@@ -19,16 +23,32 @@ from spaceinv.agent import Agent, Transition
               help='Want to play with keyboard?')
 @click.option('--render/--no-render', default=True)
 @click.option('--stack-frames', type=int, default=4)
+@click.option('--save', default='checkpoints', 
+              type=click.Path(file_okay=False))
+@click.option('--resume', default=None,
+              type=click.Path(dir_okay=False, exists=True))
 def run(n_episodes: int, 
         keyboard: bool, 
         render: bool,
-        stack_frames: int) -> None:
+        stack_frames: int,
+        save: str,
+        resume: str) -> None:
+
+    jax.config.update('jax_platform_name', 'cpu')
+
+    save = Path(save)
+    save.mkdir(exist_ok=True, parents=True)
 
     env = gym.make('SpaceInvadersNoFrameskip-v4')
-    env = gym.wrappers.AtariPreprocessing(env, frame_skip=2)
+    env = gym.wrappers.AtariPreprocessing(env, frame_skip=stack_frames)
     env = gym.wrappers.FrameStack(env, stack_frames)
 
-    rl_agent = Agent(env, stack_frames=stack_frames) 
+    if resume is not None:
+        rl_agent = Agent.load(resume, env)
+    else:
+        rl_agent = Agent(env, stack_frames=stack_frames) 
+        rl_agent.save(save / 'initial_state.pkl')
+
     keyboard_input_fn = functools.partial(_keyboard_input, env=env)
     take_action_fn = (rl_agent.take_action
                       if not keyboard 
@@ -40,7 +60,8 @@ def run(n_episodes: int,
         state = env.reset()
         episode_reward = 0
 
-        print(f'Episode [{e}]')
+        print(f'Episode [{e}]', end='')
+        init_time = time.time()
 
         for t in range(1000):
             _render(env, wait=not keyboard, render=render)
@@ -57,11 +78,18 @@ def run(n_episodes: int,
             rl_agent.experience(t)
 
             if done:
-                print(f'Episode finished after {t} timesteps')
                 break
 
             state = next_state
             print('.', end='', flush=True)
+
+        elapsed = int(time.time() - init_time)
+        print(' reward:', episode_reward, f' elapsed: {elapsed}s')
+        print(rl_agent)
+
+        if e % 100 == 0:
+            print('Checkpointing agent...')
+            rl_agent.save(save / f'last_checkpoint.pkl')
 
         rewards.append(episode_reward)
 
@@ -76,7 +104,7 @@ def run(n_episodes: int,
     env.close()
 
 
-def _moving_average(a, window=3):
+def _moving_average(a, n=3):
     ret = np.cumsum(a)
     ret[n:] = ret[n:] - ret[:-n]
     return ret[n - 1:] / n
