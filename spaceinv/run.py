@@ -13,8 +13,8 @@ import gym
 import cv2
 import numpy as np
 
-from spaceinv.agent import Agent, Transition
-
+from spaceinv.agent import Agent
+from spaceinv.replay_buffer import Transition
 
 @click.command()
 @click.option('--n-episodes', type=int, default=5,
@@ -47,7 +47,8 @@ def run(n_episodes: int,
         rl_agent = Agent.load(resume, env)
     else:
         rl_agent = Agent(env, stack_frames=stack_frames) 
-        rl_agent.save(save / 'initial_state.pkl')
+        rl_agent.save(save / 'initial_state.h5')
+        rl_agent = rl_agent.load(save / 'initial_state.h5', env=env)
 
     keyboard_input_fn = functools.partial(_keyboard_input, env=env)
     take_action_fn = (rl_agent.take_action
@@ -60,7 +61,7 @@ def run(n_episodes: int,
         state = env.reset()
         episode_reward = 0
 
-        print(f'Episode [{e}]', end='')
+        print(f'Episode [{e}]', end='', flush=True)
         init_time = time.time()
 
         for t in range(1000):
@@ -70,39 +71,40 @@ def run(n_episodes: int,
             next_state, reward, done, info = env.step(action)
             episode_reward += reward
 
-            t = Transition(state=state, 
+            t = Transition(state=np.array(state), 
                            action=action,
                            is_terminal=done,
                            reward=reward,
-                           next_state=next_state)
+                           next_state=np.array(next_state))
             rl_agent.experience(t)
 
             if done:
                 break
 
             state = next_state
-            print('.', end='', flush=True)
 
         elapsed = int(time.time() - init_time)
         print(' reward:', episode_reward, f' elapsed: {elapsed}s')
-        print(rl_agent)
 
         if e % 100 == 0:
             print('Checkpointing agent...')
-            rl_agent.save(save / f'last_checkpoint.pkl')
+            print(rl_agent)
+            rl_agent.save(save / f'last_checkpoint.h5')
 
         rewards.append(episode_reward)
 
-        if len(rewards) > 5:
-            y = _moving_average(rewards, 5)
+        if len(rewards) > 10:
+            y = _moving_average(rewards, 10)
             x = range(y.shape[0])
             plt.plot(x, y)
             plt.xlabel('Episodes')
             plt.ylabel('Reward')
-            plt.savefig('test.png')
+            plt.savefig('reports/rewards.png')
 
     env.close()
 
+
+################################################################################
 
 def _moving_average(a, n=3):
     ret = np.cumsum(a)

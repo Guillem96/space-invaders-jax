@@ -3,3 +3,4 @@ click
 tqdm
 optax
 tensorflow_datasets
+h5py
