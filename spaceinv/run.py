@@ -16,12 +16,16 @@ import numpy as np
 from spaceinv.agent import Agent
 from spaceinv.replay_buffer import Transition
 
+jax.config.update('jax_platform_name', 'cpu')
+
+
 @click.command()
 @click.option('--n-episodes', type=int, default=5,
               help='Number of training episodes')
 @click.option('--keyboard/--no-keyboard', default=False,
               help='Want to play with keyboard?')
 @click.option('--render/--no-render', default=True)
+@click.option('--eval/--no-eval', default=False)
 @click.option('--stack-frames', type=int, default=4)
 @click.option('--save', default='checkpoints', 
               type=click.Path(file_okay=False))
@@ -30,11 +34,10 @@ from spaceinv.replay_buffer import Transition
 def run(n_episodes: int, 
         keyboard: bool, 
         render: bool,
+        eval: bool,
         stack_frames: int,
         save: str,
         resume: str) -> None:
-
-    jax.config.update('jax_platform_name', 'cpu')
 
     save = Path(save)
     save.mkdir(exist_ok=True, parents=True)
@@ -55,6 +58,9 @@ def run(n_episodes: int,
                       if not keyboard 
                       else keyboard_input_fn)
 
+    if eval:
+        rl_agent.eval()
+
     rewards = []
 
     for e in range(n_episodes):
@@ -67,7 +73,7 @@ def run(n_episodes: int,
         for t in range(1000):
             _render(env, wait=not keyboard, render=render)
 
-            action = take_action_fn(state=state)
+            action = take_action_fn(state=np.array(state))
             next_state, reward, done, info = env.step(action)
             episode_reward += reward
 
@@ -86,7 +92,7 @@ def run(n_episodes: int,
         elapsed = int(time.time() - init_time)
         print(' reward:', episode_reward, f' elapsed: {elapsed}s')
 
-        if e % 100 == 0:
+        if e % 100 == 0 and not eval:
             print('Checkpointing agent...')
             print(rl_agent)
             rl_agent.save(save / f'last_checkpoint.h5')

@@ -118,7 +118,7 @@ class Agent:
     def take_action(self, state: np.ndarray) -> int:
         eps = _schedule_epsilon(self.epsilon, self.steps)
 
-        if self.training and random.random() < self.epsilon:
+        if self.training and random.random() < eps:
             return self.env.action_space.sample()
         else:
             state = state.astype('float32') / 255.
