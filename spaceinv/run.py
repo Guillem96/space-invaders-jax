@@ -26,7 +26,7 @@ jax.config.update('jax_platform_name', 'cpu')
               help='Want to play with keyboard?')
 @click.option('--render/--no-render', default=True)
 @click.option('--eval/--no-eval', default=False)
-@click.option('--stack-frames', type=int, default=4)
+@click.option('--stack-frames', type=int, default=3)
 @click.option('--save', default='checkpoints', 
               type=click.Path(file_okay=False))
 @click.option('--resume', default=None,
@@ -44,14 +44,14 @@ def run(n_episodes: int,
 
     env = gym.make('SpaceInvadersNoFrameskip-v4')
     env = gym.wrappers.AtariPreprocessing(env, frame_skip=stack_frames)
-    env = gym.wrappers.FrameStack(env, stack_frames)
+    env = gym.wrappers.FrameStack(env, stack_frames, lz4_compress=True)
 
     if resume is not None:
-        rl_agent = Agent.load(resume, env)
+        rl_agent = Agent.load(resume, env, load_replay_buffer=not eval)
     else:
         rl_agent = Agent(env, stack_frames=stack_frames) 
-        rl_agent.save(save / 'initial_state.h5')
-        rl_agent = rl_agent.load(save / 'initial_state.h5', env=env)
+        rl_agent.save(save / 'initial_state.pkl')
+        rl_agent = rl_agent.load(save / 'initial_state.pkl', env=env)
 
     keyboard_input_fn = functools.partial(_keyboard_input, env=env)
     take_action_fn = (rl_agent.take_action
@@ -61,7 +61,8 @@ def run(n_episodes: int,
     if eval:
         rl_agent.eval()
 
-    rewards = []
+    beta = .9
+    ema_rewards = []
 
     for e in range(n_episodes):
         state = env.reset()
@@ -77,11 +78,11 @@ def run(n_episodes: int,
             next_state, reward, done, info = env.step(action)
             episode_reward += reward
 
-            t = Transition(state=np.array(state), 
+            t = Transition(state=state, 
                            action=action,
                            is_terminal=done,
                            reward=reward,
-                           next_state=np.array(next_state))
+                           next_state=next_state)
             rl_agent.experience(t)
 
             if done:
@@ -95,17 +96,22 @@ def run(n_episodes: int,
         if e % 100 == 0 and not eval:
             print('Checkpointing agent...')
             print(rl_agent)
-            rl_agent.save(save / f'last_checkpoint.h5')
+            rl_agent.save(save / f'last_checkpoint.pkl')
 
-        rewards.append(episode_reward)
+        if not ema_rewards:
+            ema_rewards = [episode_reward]
+        else:
+            ema_rewards.append(beta * ema_rewards[-1] + 
+                               (1 - beta) * episode_reward)
 
-        if len(rewards) > 10:
-            y = _moving_average(rewards, 10)
-            x = range(y.shape[0])
-            plt.plot(x, y)
-            plt.xlabel('Episodes')
-            plt.ylabel('Reward')
-            plt.savefig('reports/rewards.png')
+        _, ax = plt.subplots()
+        plt.title('Reward Exponential Moving Average')
+        ax.plot(range(len(ema_rewards)), ema_rewards)
+        ax.text(.05, .95, f'Last episode: {e}', transform=ax.transAxes)
+        plt.xlabel('Episodes')
+        plt.ylabel('Reward')
+        plt.savefig('reports/rewards.png')
+        plt.close()
 
     env.close()
 

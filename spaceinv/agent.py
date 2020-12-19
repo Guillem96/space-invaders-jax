@@ -1,11 +1,13 @@
 # -*- coding:utf-8 -*-
 
+import copy
 import random
 
 import jax
 import jax.numpy as np
 import optax
 
+import pickle
 import h5py
 
 import gym
@@ -29,9 +31,7 @@ class Agent:
         self.batch_size = batch_size
 
         self.N = N
-        self.replay_buffer = ReplayBuffer(
-                N=self.N,
-                state_shape=self.env.observation_space.shape)
+        self.replay_buffer = ReplayBuffer(N=self.N)
 
         self.steps = 0
         self.epsilon = 1
@@ -44,14 +44,14 @@ class Agent:
         self.training = True
 
         # Initialize the optimizer
-        self.optim = optax.rmsprop(1e-4)
+        self.optim = optax.adam(1e-4)
         self.optim_state = self.optim.init(self.Q.parameters)
 
         # Backward step
         def loss_fn(params, target, states, actions):
             V = self.Q.forward(params, states)
             V = V[np.arange(V.shape[0]), actions]
-            return np.mean((V - target) ** 2)
+            return np.mean((target - V) ** 2)
 
         def update_Q(params, target, optim_state, observations, actions):
             grads = self.backward_fn(params, target, observations, actions)
@@ -60,6 +60,7 @@ class Agent:
             return new_params, optim_state
 
         self.Q_star = jax.jit(self.Q.forward)
+        self.Q_star_params = copy.deepcopy(self.Q.parameters)
         self.backward_fn = jax.grad(jax.jit(loss_fn))
         self.update_Q = jax.jit(update_Q)
 
@@ -76,6 +77,9 @@ class Agent:
         self.replay_buffer.experience(transition)
         self._train()
         self.steps += 1
+
+        if transition.is_terminal:
+            self.Q_star_params = copy.deepcopy(self.Q.parameters)
 
     def _train(self) -> None:
         # Sample from replay buffer
@@ -101,7 +105,7 @@ class Agent:
         rewards = transitions.reward.astype('float32')
         rewards = rewards.reshape(-1)
 
-        V_star = self.Q_star(self.Q.parameters, next_states)
+        V_star = self.Q_star(self.Q_star_params, next_states)
         yj = np.where(is_terminal, 
                       rewards,
                       rewards + self.gamma * np.max(V_star, axis=-1))
@@ -134,34 +138,70 @@ class Agent:
         return (f'Agent(steps={self.steps}, '
                       f'epsilon={eps}, '
                       f'gamma={self.gamma}, '
-                      f'stack_frames={self.stack_frames})')
+                      f'stack_frames={self.stack_frames}, '
+                      f'training={self.training})')
 
     def save(self, f: str) -> None:
-        f = h5py.File(str(f), 'w')
+        serialized = {
+            'Q': self.Q.parameters,
+            'optim': self.optim_state,
 
-        nn.save_tree(self.Q.parameters, f, 'Q', append=True)
-        self.replay_buffer.save(f, append=True)
+            'steps': self.steps,
+            'gamma': self.gamma,
+            'batch_size': self.batch_size,
+            'N': self.N,
+            'stack_frames': self.stack_frames,
 
-        f.create_dataset('steps', data=self.steps)
-        f.create_dataset('gamma', data=self.gamma)
-        f.create_dataset('batch_size', data=self.batch_size)
-        f.create_dataset('N', data=self.N)
-        f.create_dataset('stack_frames', data=self.stack_frames)
-        f.close()
+            'replay_buffer': self.replay_buffer
+        }
+
+        pickle.dump(serialized, open(str(f), 'wb'))
+
+        # f = h5py.File(str(f), 'w')
+
+        # nn.save_tree(self.Q.parameters, f, 'Q', append=True)
+        # self.replay_buffer.save(f, append=True)
+
+        # f.create_dataset('steps', data=self.steps)
+        # f.create_dataset('gamma', data=self.gamma)
+        # f.create_dataset('batch_size', data=self.batch_size)
+        # f.create_dataset('N', data=self.N)
+        # f.create_dataset('stack_frames', data=self.stack_frames)
+        # f.close()
 
     @classmethod
-    def load(cls, f: str, env: gym.Env) -> 'Agent':
-        f = h5py.File(str(f), 'r')
-        instance = cls(N=np.array(f['N']).item(),
-                       env=env,
-                       gamma=np.array(f['gamma']).item(),
-                       batch_size=np.array(f['batch_size']).item(),
-                       stack_frames=np.array(f['stack_frames']).item())
+    def load(cls, 
+             f: str, 
+             env: gym.Env, 
+             load_replay_buffer: bool = True) -> 'Agent':
 
-        instance.Q.update(nn.load_tree(f, 'Q', close=False))
-        instance.steps = np.array(f['steps']).item()
-        instance.replay_buffer = ReplayBuffer.load(f)
+        unserialized = pickle.load(open(str(f), 'rb'))
+        
+        instance = cls(N=unserialized['N'],
+                       env=env,
+                       gamma=unserialized['gamma'],
+                       batch_size=unserialized['batch_size'],
+                       stack_frames=unserialized['stack_frames'])
+        instance.Q.update(unserialized['Q'])
+        instance.optim_state = unserialized['optim']
+        instance.replay_buffer = unserialized['replay_buffer']
+        instance.steps = unserialized['steps']
         return instance
+
+        #         f = h5py.File(str(f), 'r')
+        # instance = cls(N=np.array(f['N']).item(),
+                       # env=env,
+                       # gamma=np.array(f['gamma']).item(),
+                       # batch_size=np.array(f['batch_size']).item(),
+                       # stack_frames=np.array(f['stack_frames']).item())
+
+        # instance.Q.update(nn.load_tree(f, 'Q', close=False))
+        # instance.steps = np.array(f['steps']).item()
+
+        # if load_replay_buffer:
+            # instance.replay_buffer = ReplayBuffer.load(f)
+
+        # return instance
 
 
 @jax.jit
