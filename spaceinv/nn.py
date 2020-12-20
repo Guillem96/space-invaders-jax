@@ -11,8 +11,6 @@ import jax
 import jax.numpy as np
 import numpy as onp
 
-import h5py
-
 
 Parameter = Mapping[str, np.ndarray]
 Kernel = Union[Tuple[int, int], int]
@@ -167,72 +165,10 @@ def bce_loss(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return np.sum(loss)
 
 
-################################################################################
-
-def save_tree(values: Union[Parameter, Sequence[Parameter]],
-              f: Union[str, h5py.File, Path],
-              dataset_name: str,
-              append: bool = False) -> None:
-
-    if not isinstance(values, (list, dict)):
-        raise ValueError('Only lists and dictionaries supported')
-
-    if append and not isinstance(f, h5py.File):
-        raise ValueError('To append the tree to a file it must be'
-                         ' already opened.')
-
-    if isinstance(f, (str, Path)):
-        f = h5py.File(str(f), 'w')
-
-    if isinstance(values, list):
-        for i, p in enumerate(values):
-            if len(p) == 0:
-                f.create_dataset(f'{dataset_name}/{i}/empty',
-                                 shape=())
-            else:
-                for k, v in p.items():
-                    ds = f.create_dataset(f'{dataset_name}/{i}/{k}', 
-                                      data=onp.asarray(v))
-    elif isinstance(values, dict):
-        for k, v in values.items():
-            ds = f.create_dataset(f'{dataset_name}/{k}', data=onp.asarray(v))
-
-    if not append:
-        f.close()
-
-
-def load_tree(f: Union[str, h5py.File, Path],
-              dataset_name: str,
-              close: bool = True) -> Union[Parameter, Sequence[Parameter]]:
-
-    def load_layer(ds):
-        layer_params = {}
-        if 'empty' in list(ds):
-            return layer_params
-        else:
-            for w in ds:
-                layer_params[w] = ds[f'{ds.name}/{w}'][:]
-            return layer_params
-
-    if isinstance(f, (str, Path)):
-        f = h5py.File(str(f), 'r')
-
-    datasets = list(f[dataset_name])
-    is_list = all(o.isnumeric() for o in datasets)
-
-    if is_list:
-        parameters = []
-        for ds in sorted(map(int, datasets)):
-            layer_params_ds = f[f'{dataset_name}/{ds}']
-            layer_params = load_layer(layer_params_ds)
-            parameters.append(layer_params)
-    else:
-        parameters = load_layer(f[f'{dataset_name}'])
-
-    if close:
-        f.close()
-
-    return parameters
+def mse_loss(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    y_true = y_true.astype('float32')
+    y_pred = y_pred.astype('float32')
+    return np.mean(np.square(y_true - y_pred))
 
 
 ################################################################################

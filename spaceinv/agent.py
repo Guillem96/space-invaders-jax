@@ -2,30 +2,47 @@
 
 import copy
 import random
+import pickle
+from pathlib import Path
+from typing import Union
 
 import jax
 import jax.numpy as np
 import optax
-
-import pickle
-import h5py
-
-import gym
 
 import spaceinv.nn as nn
 from spaceinv.replay_buffer import ReplayBuffer, Transition
 
 
 class Agent:
+    """
+    Reinforcement Learning agent implmenting the DQN algorithm described at
+    (https://www.cs.toronto.edu/~vmnih/docs/dqn.pdf)with some slight 
+    modifications.
+
+    Paramters
+    ---------
+    n_actions: int
+        Size of the action space
+    stack_frames: int
+        The number of stacked frames so the agent can gain knowledge about the
+        motion
+    gamma: float, default .99
+        Discount factor
+    batch_size: int, default 32
+        Number of transitions used to update the Q parameters
+    N: int, default 1e5
+        Replay experience buffer capacity
+    """
 
     def __init__(self, 
-                 env: gym.Env, 
+                 n_actions: int,
                  stack_frames: int,
                  gamma: float = .99,
                  batch_size: int = 32,
                  N: int = 1e5) -> None:
 
-        self.env = env
+        self.n_actions = n_actions
         self.gamma = gamma
         self.stack_frames = stack_frames
         self.batch_size = batch_size
@@ -37,9 +54,7 @@ class Agent:
         self.epsilon = 1
 
         key = jax.random.PRNGKey(0)
-        self.Q = _build_q_net(key, 
-                              stack_frames, 
-                              self.env.action_space.n)
+        self.Q = _build_q_net(key, stack_frames, n_actions)
 
         self.training = True
 
@@ -51,7 +66,7 @@ class Agent:
         def loss_fn(params, target, states, actions):
             V = self.Q.forward(params, states)
             V = V[np.arange(V.shape[0]), actions]
-            return np.mean((target - V) ** 2)
+            return nn.mse_loss(target, V)
 
         def update_Q(params, target, optim_state, observations, actions):
             grads = self.backward_fn(params, target, observations, actions)
@@ -65,12 +80,27 @@ class Agent:
         self.update_Q = jax.jit(update_Q)
 
     def train(self) -> None:
+        """
+        Set the agent in training mode:
+            - After every experience the agent is going to update the Q 
+              parameters
+            - Epsilon greedy to select an action
+        """
         self.training = True
 
     def eval(self) -> None:
+        """
+        Set the agent in evaluation mode:
+            - No more training (fixed NN parameters)
+            - Take action always use the learnt policy
+        """
         self.training = False
 
     def experience(self, transition: Transition) -> None:
+        """
+        Updates the agent appending the given transition to the replay buffer
+        and updates its weights sampling `batch_size` transitions
+        """
         if not self.training:
             return
 
@@ -120,10 +150,21 @@ class Agent:
         self.Q = self.Q.update(new_params)
 
     def take_action(self, state: np.ndarray) -> int:
+        """
+        Take an action. When training the action can be selected at random
+        (epsilon greedy) or from the learnt policy. When in eval model the 
+        action will always com from the "optimal" policy.
+
+        Parameters
+        ----------
+        state: np.ndarray
+            Current state of the game. This is a tensor of shape 
+            [`stacked_frames`, 84, 84]
+        """
         eps = _schedule_epsilon(self.epsilon, self.steps)
 
         if self.training and random.random() < eps:
-            return self.env.action_space.sample()
+            return random.randint(0, self.n_actions - 1)
         else:
             state = state.astype('float32') / 255.
             state = np.expand_dims(np.array(state), 0)
@@ -141,7 +182,7 @@ class Agent:
                       f'stack_frames={self.stack_frames}, '
                       f'training={self.training})')
 
-    def save(self, f: str) -> None:
+    def save(self, f: Union[str, Path]) -> None:
         serialized = {
             'Q': self.Q.parameters,
             'optim': self.optim_state,
@@ -151,61 +192,36 @@ class Agent:
             'batch_size': self.batch_size,
             'N': self.N,
             'stack_frames': self.stack_frames,
+            'n_actions': self.n_actions,
 
             'replay_buffer': self.replay_buffer
         }
 
         pickle.dump(serialized, open(str(f), 'wb'))
 
-        # f = h5py.File(str(f), 'w')
-
-        # nn.save_tree(self.Q.parameters, f, 'Q', append=True)
-        # self.replay_buffer.save(f, append=True)
-
-        # f.create_dataset('steps', data=self.steps)
-        # f.create_dataset('gamma', data=self.gamma)
-        # f.create_dataset('batch_size', data=self.batch_size)
-        # f.create_dataset('N', data=self.N)
-        # f.create_dataset('stack_frames', data=self.stack_frames)
-        # f.close()
-
     @classmethod
-    def load(cls, 
-             f: str, 
-             env: gym.Env, 
-             load_replay_buffer: bool = True) -> 'Agent':
+    def load(cls, f: Union[str, Path]) -> 'Agent':
 
         unserialized = pickle.load(open(str(f), 'rb'))
-        
+
         instance = cls(N=unserialized['N'],
-                       env=env,
+                       n_actions=unserialized['n_actions'],
                        gamma=unserialized['gamma'],
                        batch_size=unserialized['batch_size'],
                        stack_frames=unserialized['stack_frames'])
+
         instance.Q.update(unserialized['Q'])
         instance.optim_state = unserialized['optim']
-        instance.replay_buffer = unserialized['replay_buffer']
+
+        if 'replay_buffer' in unserialized:
+            instance.replay_buffer = unserialized['replay_buffer']
         instance.steps = unserialized['steps']
+
         return instance
-
-        #         f = h5py.File(str(f), 'r')
-        # instance = cls(N=np.array(f['N']).item(),
-                       # env=env,
-                       # gamma=np.array(f['gamma']).item(),
-                       # batch_size=np.array(f['batch_size']).item(),
-                       # stack_frames=np.array(f['stack_frames']).item())
-
-        # instance.Q.update(nn.load_tree(f, 'Q', close=False))
-        # instance.steps = np.array(f['steps']).item()
-
-        # if load_replay_buffer:
-            # instance.replay_buffer = ReplayBuffer.load(f)
-
-        # return instance
 
 
 @jax.jit
-def _schedule_epsilon(max_eps, step):
+def _schedule_epsilon(max_eps: float, step: int) -> float:
     def decay(step):
         m = (.1 - max_eps) / 1e6
         return m * step + 1.
@@ -216,37 +232,27 @@ def _schedule_epsilon(max_eps, step):
                         operand=step)
 
 
-def _lazies_to_np(lazy):
-    return np.stack([np.array(o) for o in lazy])
-
-
 def _build_q_net(key: jax.random.PRNGKey, 
                  n_frames: int, n_actions: int) -> nn.Layer:
 
     l_keys = jax.random.split(key, 4)
 
-    return nn.sequential(nn.conv_2d(l_keys[0],
-                                    in_channels=n_frames,
-                                    out_channels=16,
-                                    kernel_size=8,
-                                    stride=4,
+    feature_extractor = [nn.conv_2d(l_keys[0],
+                                    in_channels=n_frames, out_channels=16,
+                                    kernel_size=8, stride=4,
                                     activation=jax.nn.relu),
 
                          nn.conv_2d(l_keys[1],
-                                    in_channels=16,
-                                    out_channels=32,
-                                    kernel_size=4,
-                                    stride=2,
-                                    activation=jax.nn.relu),
-                         nn.flatten(),
-                         nn.linear(l_keys[2],
-                                   in_features=2592,
-                                   out_features=256,
-                                   activation=jax.nn.relu),
-                         nn.linear(l_keys[3],
-                                   in_features=256,
-                                   out_features=n_actions))
+                                    in_channels=16, out_channels=32,
+                                    kernel_size=4, stride=2,
+                                    activation=jax.nn.relu)]
 
+    classifier = [nn.flatten(),
+                  nn.linear(l_keys[2],
+                            in_features=2592, out_features=256,
+                            activation=jax.nn.relu),
+                  nn.linear(l_keys[3],
+                            in_features=256, out_features=n_actions)]
 
-
+    return nn.sequential(*feature_extractor, *classifier)
 

@@ -4,6 +4,7 @@ import sys
 import time
 import functools
 from pathlib import Path
+from typing import Callable, Sequence
 
 import click
 import matplotlib.pyplot as plt
@@ -27,8 +28,11 @@ jax.config.update('jax_platform_name', 'cpu')
 @click.option('--render/--no-render', default=True)
 @click.option('--eval/--no-eval', default=False)
 @click.option('--stack-frames', type=int, default=3)
+
 @click.option('--save', default='checkpoints', 
               type=click.Path(file_okay=False))
+@click.option('--rewards-plot', default='reports/rewards.png',
+              type=click.Path(dir_okay=False))
 @click.option('--resume', default=None,
               type=click.Path(dir_okay=False, exists=True))
 def run(n_episodes: int, 
@@ -37,21 +41,27 @@ def run(n_episodes: int,
         eval: bool,
         stack_frames: int,
         save: str,
+        rewards_plot: str,
         resume: str) -> None:
 
     save = Path(save)
     save.mkdir(exist_ok=True, parents=True)
+
+    rewards_plot = Path(rewards_plot)
+    rewards_plot.parent.mkdir(exist_ok=True, parents=True)
 
     env = gym.make('SpaceInvadersNoFrameskip-v4')
     env = gym.wrappers.AtariPreprocessing(env, frame_skip=stack_frames)
     env = gym.wrappers.FrameStack(env, stack_frames, lz4_compress=True)
 
     if resume is not None:
-        rl_agent = Agent.load(resume, env, load_replay_buffer=not eval)
+        rl_agent = Agent.load(resume)
+        print(rl_agent)
     else:
-        rl_agent = Agent(env, stack_frames=stack_frames) 
+        rl_agent = Agent(n_actions=env.action_space.n, 
+                         stack_frames=stack_frames)
         rl_agent.save(save / 'initial_state.pkl')
-        rl_agent = rl_agent.load(save / 'initial_state.pkl', env=env)
+        rl_agent = rl_agent.load(save / 'initial_state.pkl')
 
     keyboard_input_fn = functools.partial(_keyboard_input, env=env)
     take_action_fn = (rl_agent.take_action
@@ -60,36 +70,21 @@ def run(n_episodes: int,
 
     if eval:
         rl_agent.eval()
+    else:
+        rl_agent.train()
 
     beta = .9
-    ema_rewards = []
+    ema_rewards = [0.]
 
     for e in range(n_episodes):
-        state = env.reset()
-        episode_reward = 0
 
         print(f'Episode [{e}]', end='', flush=True)
         init_time = time.time()
-
-        for t in range(1000):
-            _render(env, wait=not keyboard, render=render)
-
-            action = take_action_fn(state=np.array(state))
-            next_state, reward, done, info = env.step(action)
-            episode_reward += reward
-
-            t = Transition(state=state, 
-                           action=action,
-                           is_terminal=done,
-                           reward=reward,
-                           next_state=next_state)
-            rl_agent.experience(t)
-
-            if done:
-                break
-
-            state = next_state
-
+        episode_reward = _run_episode(env=env, agent=rl_agent,
+                                      initial_state=env.reset(),
+                                      take_action_fn=take_action_fn,
+                                      is_keyboard_input=keyboard,
+                                      render=render)
         elapsed = int(time.time() - init_time)
         print(' reward:', episode_reward, f' elapsed: {elapsed}s')
 
@@ -98,31 +93,58 @@ def run(n_episodes: int,
             print(rl_agent)
             rl_agent.save(save / f'last_checkpoint.pkl')
 
-        if not ema_rewards:
-            ema_rewards = [episode_reward]
-        else:
-            ema_rewards.append(beta * ema_rewards[-1] + 
-                               (1 - beta) * episode_reward)
-
-        _, ax = plt.subplots()
-        plt.title('Reward Exponential Moving Average')
-        ax.plot(range(len(ema_rewards)), ema_rewards)
-        ax.text(.05, .95, f'Last episode: {e}', transform=ax.transAxes)
-        plt.xlabel('Episodes')
-        plt.ylabel('Reward')
-        plt.savefig('reports/rewards.png')
-        plt.close()
+        ema_rewards.append(beta * ema_rewards[-1] + 
+                           (1 - beta) * episode_reward)
+        _plot_ema_rewards(ema_rewards, e, rewards_plot)
 
     env.close()
 
 
-################################################################################
+def _run_episode(agent: Agent, 
+                 env: gym.Env,
+                 initial_state: np.ndarray,
+                 take_action_fn: Callable[[np.ndarray], int],
+                 is_keyboard_input: bool,
+                 render: bool) -> float:
 
-def _moving_average(a, n=3):
-    ret = np.cumsum(a)
-    ret[n:] = ret[n:] - ret[:-n]
-    return ret[n - 1:] / n
+    episode_reward = 0
+    state = initial_state
 
+    for t in range(1000):
+        _render(env, wait=not is_keyboard_input, render=render)
+
+        action = take_action_fn(state=np.array(state))
+        next_state, reward, done, info = env.step(action)
+        episode_reward += reward
+
+        t = Transition(state=state, 
+                       action=action,
+                       is_terminal=done,
+                       reward=reward,
+                       next_state=next_state)
+        agent.experience(t)
+
+        if done:
+            break
+
+        state = next_state
+
+    return episode_reward
+
+
+def _plot_ema_rewards(ema_rewards: Sequence[float], 
+                      episode: int, f: Path) -> None:
+    _, ax = plt.subplots()
+    plt.title('Reward Exponential Moving Average')
+    ax.plot(range(len(ema_rewards)), ema_rewards)
+    ax.text(.05, .95, f'Last episode: {episode}', transform=ax.transAxes)
+    plt.xlabel('Episodes')
+    plt.ylabel('Reward')
+    plt.savefig(str(f))
+    plt.close()
+
+
+###############################################################################
 
 def _keyboard_input(env, **kwargs):
     key = cv2.waitKey(30) & 0xFF
