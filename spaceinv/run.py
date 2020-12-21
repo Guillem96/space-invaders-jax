@@ -78,7 +78,7 @@ def run(n_episodes: int,
 
     for e in range(n_episodes):
 
-        print(f'Episode [{e}]', end='', flush=True)
+        print(f'Episode [{e}] ', end='', flush=True)
         init_time = time.time()
         episode_reward = _run_episode(env=env, agent=rl_agent,
                                       initial_state=env.reset(),
@@ -86,7 +86,7 @@ def run(n_episodes: int,
                                       is_keyboard_input=keyboard,
                                       render=render)
         elapsed = int(time.time() - init_time)
-        print(' reward:', episode_reward, f' elapsed: {elapsed}s')
+        print('reward:', episode_reward, f' elapsed: {elapsed}s')
 
         if e % 100 == 0 and not eval:
             print('Checkpointing agent...')
