@@ -14,7 +14,7 @@ import spaceinv.nn as nn
 from spaceinv.replay_buffer import ReplayBuffer, Transition
 
 
-class Agent:
+class DQNAgent:
     """
     Reinforcement Learning agent implmenting the DQN algorithm described at
     (https://www.cs.toronto.edu/~vmnih/docs/dqn.pdf)with some slight 
@@ -218,6 +218,10 @@ class Agent:
         instance.steps = unserialized['steps']
 
         return instance
+
+
+class A2CAgent:
+    pass
 
 
 @jax.jit

@@ -14,10 +14,16 @@ import gym
 import cv2
 import numpy as np
 
-from spaceinv.agent import Agent
+from spaceinv.agent import A2CAgent, DQNAgent
 from spaceinv.replay_buffer import Transition
 
 jax.config.update('jax_platform_name', 'cpu')
+
+
+_AGENTS = {
+    'dqn': DQNAgent,
+    'a2c': A2CAgent
+}
 
 
 @click.command()
@@ -55,11 +61,11 @@ def run(n_episodes: int,
     env = gym.wrappers.FrameStack(env, stack_frames, lz4_compress=True)
 
     if resume is not None:
-        rl_agent = Agent.load(resume)
+        rl_agent = DQNAgent.load(resume)
         print(rl_agent)
     else:
-        rl_agent = Agent(n_actions=env.action_space.n, 
-                         stack_frames=stack_frames)
+        rl_agent = DQNAgent(n_actions=env.action_space.n, 
+                            stack_frames=stack_frames)
         rl_agent.save(save / 'initial_state.pkl')
         rl_agent = rl_agent.load(save / 'initial_state.pkl')
 
